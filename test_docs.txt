@@ -1,0 +1,5 @@
+ContextAgent is a self-correcting RAG pipeline built with LangGraph and MCP.
+It retrieves documents from ChromaDB, grades their relevance, generates an answer
+using Gemini Pro, and checks for hallucinations before returning the response.
+If hallucination is detected, it refines the query and tries again up to 3 times.
+EOF

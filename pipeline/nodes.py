@@ -11,9 +11,10 @@ chromadb, tavily, or filesystem libraries directly.
 import asyncio
 import json
 import os
+import sys
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -23,15 +24,15 @@ load_dotenv()
 
 # ── Model initialisation ───────────────────────────────────────────────────────
 
-_flash = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
+_flash = ChatGroq(
+    model="llama-3.1-8b-instant",
+    groq_api_key=os.getenv("GROQ_API_KEY"),
     temperature=0,
 )
 
-_pro = ChatGoogleGenerativeAI(
-    model="gemini-1.5-pro",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
+_pro = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    groq_api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.2,
 )
 
@@ -41,7 +42,7 @@ async def _call_mcp_tool(server_script: str, tool_name: str, args: dict) -> str:
     """
     Spawn an MCP stdio server, call one tool, return its text result, shut down.
     """
-    params = StdioServerParameters(command="python", args=[server_script])
+    params = StdioServerParameters(command=sys.executable, args=[server_script])
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -168,22 +169,29 @@ async def hallucination_checker_node(state: AgentState) -> dict:
 
     context = "\n\n---\n\n".join(f"[Source {i+1}]: {c['text']}" for i, c in enumerate(chunks))
     prompt = (
-        f"Does the following answer contain any claims NOT supported by the provided sources?\n\n"
-        f"Sources:\n{context}\n\n"
-        f"Answer: {answer}\n\n"
-        f"Respond with 'yes' if there are unsupported claims, 'no' if everything is grounded."
+        f"You are a strict fact-checker. Your job is to verify whether an answer is "
+        f"fully supported by the given sources.\n\n"
+        f"SOURCES:\n{context}\n\n"
+        f"ANSWER: {answer}\n\n"
+        f"Rules:\n"
+        f"- If every sentence in the answer can be directly traced to the sources, respond 'no'.\n"
+        f"- Paraphrasing and summarising the sources is NOT a hallucination.\n"
+        f"- Only respond 'yes' if the answer introduces facts, numbers, or claims "
+        f"that are completely absent from the sources.\n"
+        f"- A single word answer is required: 'yes' or 'no'."
     )
 
     response = await _flash.ainvoke(prompt)
-    hallucination = response.content.strip().lower().startswith("yes")
+    verdict = response.content.strip().lower()
+    hallucination = verdict.startswith("yes")
 
     refined_query = None
     if hallucination:
-        # Ask the model to rewrite the query to be more specific
         refine_prompt = (
-            f"The answer to the question '{query}' contained hallucinations. "
-            f"Rewrite the question to be more specific and targeted so a vector "
-            f"search is more likely to find grounding evidence. "
+            f"A RAG system tried to answer this question: '{query}'\n"
+            f"The answer could not be fully grounded in the retrieved documents.\n"
+            f"Rewrite the question to be more specific so a vector search is more "
+            f"likely to retrieve supporting evidence.\n"
             f"Return only the rewritten question, nothing else."
         )
         refine_resp = await _flash.ainvoke(refine_prompt)
